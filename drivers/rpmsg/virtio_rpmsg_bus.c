@@ -16,6 +16,9 @@
 #include <linux/jiffies.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/moduleparam.h>
+#include <linux/overflow.h>
+#include <linux/stringify.h>
 #include <linux/mutex.h>
 #include <linux/rpmsg.h>
 #include <linux/rpmsg/byteorder.h>
@@ -108,14 +111,18 @@ struct virtio_rpmsg_channel {
 	container_of(_rpdev, struct virtio_rpmsg_channel, rpdev)
 
 /*
- * We're allocating buffers of 512 bytes each for communications. The
- * number of buffers will be computed from the number of buffers supported
- * by the vring, upto a maximum of 512 buffers (256 in each direction).
+ * By default we allocate buffers of 512 bytes each for communications. The
+ * buffer size can be changed with the "max_buf_size" module parameter.
+ * The number of buffers will be computed from the number of buffers supported
+ * by the vring, upto a maximum of 512 buffers (256 in each direction) by
+ * default; this maximum can be changed with the "max_num_bufs" module
+ * parameter.
  *
- * Each buffer will have 16 bytes for the msg header and 496 bytes for
- * the payload.
+ * With the default size, each buffer will have 16 bytes for the msg header
+ * and 496 bytes for the payload.
  *
- * This will utilize a maximum total space of 256KB for the buffers.
+ * This will utilize a maximum total space of 256KB for the buffers with the
+ * default buffer size (MAX_RPMSG_NUM_BUFS * max_buf_size in general).
  *
  * We might also want to add support for user-provided buffers in time.
  * This will allow bigger buffer size flexibility, and can also be used
@@ -123,10 +130,36 @@ struct virtio_rpmsg_channel {
  *
  * Note that these numbers are purely a decision of this driver - we
  * can change this without changing anything in the firmware of the remote
- * processor.
+ * processor (as long as the firmware doesn't hardcode the buffer size).
  */
 #define MAX_RPMSG_NUM_BUFS	(512)
 #define MAX_RPMSG_BUF_SIZE	(512)
+
+/*
+ * The len field of struct rpmsg_hdr is 16 bits wide, so the payload can't
+ * exceed U16_MAX bytes. Buffers are also kept 8-byte aligned.
+ */
+#define MIN_RPMSG_BUF_SIZE	(sizeof(struct rpmsg_hdr) + 8)
+#define MAX_RPMSG_BUF_SIZE_LIMIT	(sizeof(struct rpmsg_hdr) + U16_MAX)
+
+static unsigned int max_buf_size = MAX_RPMSG_BUF_SIZE;
+module_param(max_buf_size, uint, 0444);
+MODULE_PARM_DESC(max_buf_size,
+		 "Size in bytes of each rpmsg rx/tx buffer, including the 16 byte header (default: "
+		 __stringify(MAX_RPMSG_BUF_SIZE) ")");
+
+/*
+ * Half of the buffers are used for RX and half for TX, so the number of
+ * buffers must be even and at least 2. It is also capped by the vring size
+ * (2 * vring size) at probe time.
+ */
+#define MIN_RPMSG_NUM_BUFS\t(2)
+
+static unsigned int max_num_bufs = MAX_RPMSG_NUM_BUFS;
+module_param(max_num_bufs, uint, 0444);
+MODULE_PARM_DESC(max_num_bufs,
+\t\t "Maximum total number of rpmsg buffers (rx + tx); rounded down to an even number (default: "
+\t\t __stringify(MAX_RPMSG_NUM_BUFS) ")");
 
 /*
  * Local addresses are dynamically allocated on-demand.
@@ -832,6 +865,25 @@ static int rpmsg_probe(struct virtio_device *vdev)
 	int err = 0, i;
 	size_t total_buf_space;
 	bool notify;
+	size_t buf_size;
+	unsigned int max_bufs;
+
+	buf_size = ALIGN(max_buf_size, 8);
+	if (buf_size < MIN_RPMSG_BUF_SIZE || buf_size > MAX_RPMSG_BUF_SIZE_LIMIT) {
+		dev_err(&vdev->dev,
+			"invalid max_buf_size %u (valid range: %zu - %zu)\n",
+			max_buf_size, (size_t)MIN_RPMSG_BUF_SIZE,
+			(size_t)MAX_RPMSG_BUF_SIZE_LIMIT);
+		return -EINVAL;
+	}
+
+	max_bufs = ALIGN_DOWN(max_num_bufs, 2);
+	if (max_bufs < MIN_RPMSG_NUM_BUFS) {
+		dev_err(&vdev->dev,
+			"invalid max_num_bufs %u (must be at least %d)\n",
+			max_num_bufs, MIN_RPMSG_NUM_BUFS);
+		return -EINVAL;
+	}
 
 	vrp = kzalloc_obj(*vrp);
 	if (!vrp)
@@ -857,14 +909,20 @@ static int rpmsg_probe(struct virtio_device *vdev)
 		virtqueue_get_vring_size(vrp->svq));
 
 	/* we need less buffers if vrings are small */
-	if (virtqueue_get_vring_size(vrp->rvq) < MAX_RPMSG_NUM_BUFS / 2)
+	if (virtqueue_get_vring_size(vrp->rvq) < max_bufs / 2)
 		vrp->num_bufs = virtqueue_get_vring_size(vrp->rvq) * 2;
 	else
-		vrp->num_bufs = MAX_RPMSG_NUM_BUFS;
+		vrp->num_bufs = max_bufs;
 
-	vrp->buf_size = MAX_RPMSG_BUF_SIZE;
+	vrp->buf_size = buf_size;
 
-	total_buf_space = vrp->num_bufs * vrp->buf_size;
+	if (check_mul_overflow((size_t)vrp->num_bufs, (size_t)vrp->buf_size,
+			       &total_buf_space)) {
+		dev_err(&vdev->dev, "buffer space overflow (%u x %u)\n",
+			vrp->num_bufs, vrp->buf_size);
+		err = -EINVAL;
+		goto vqs_del;
+	}
 
 	/* allocate coherent memory for the buffers */
 	bufs_va = dma_alloc_coherent(vdev->dev.parent,
