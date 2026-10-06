@@ -1,0 +1,134 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Arducam Pivariety camera on T3 Gemstone O1 CSI0
+ * Copyright (C) 2025 T3 Foundation - https://www.t3vakfi.org/
+ */
+
+/dts-v1/;
+/plugin/;
+
+/*
+ * Expose the loaded overlay under:
+ * /proc/device-tree/chosen/overlays/
+ */
+&{/chosen} {
+	overlays {
+		k3-am67a-t3-gem-o1-csi0-arducam-pivariety.kernel = __TIMESTAMP__;
+	};
+};
+
+/*
+ * The Pivariety driver requires a 24 MHz xclk.
+ *
+ * These regulator nodes satisfy the driver's required VANA, VDIG and
+ * VDDL supply bindings. They do not control physical voltage rails
+ * because no regulator GPIOs are associated with them.
+ */
+&{/} {
+	clk_csi0_pivariety_fixed: csi0-pivariety-xclk {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <24000000>;
+	};
+
+	pivariety_vana: pivariety-vana-regulator {
+		compatible = "regulator-fixed";
+		regulator-name = "pivariety-vana";
+		regulator-min-microvolt = <2800000>;
+		regulator-max-microvolt = <2800000>;
+		regulator-always-on;
+		regulator-boot-on;
+	};
+
+	pivariety_vdig: pivariety-vdig-regulator {
+		compatible = "regulator-fixed";
+		regulator-name = "pivariety-vdig";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+		regulator-always-on;
+		regulator-boot-on;
+	};
+
+	pivariety_vddl: pivariety-vddl-regulator {
+		compatible = "regulator-fixed";
+		regulator-name = "pivariety-vddl";
+		regulator-min-microvolt = <1200000>;
+		regulator-max-microvolt = <1200000>;
+		regulator-always-on;
+		regulator-boot-on;
+	};
+};
+
+/*
+ * CSI0 camera control bus.
+ * T3 Gemstone O1 IMX219 reference uses main_i2c2 for CSI0.
+ */
+&main_i2c2 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&main_i2c2_pins_default>;
+	clock-frequency = <400000>;
+
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	arducam_pivariety_0: camera@c {
+		compatible = "arducam,arducam-pivariety";
+		reg = <0x0c>;
+		status = "okay";
+
+		clocks = <&clk_csi0_pivariety_fixed>;
+		clock-names = "xclk";
+
+		VANA-supply = <&pivariety_vana>;
+		VDIG-supply = <&pivariety_vdig>;
+		VDDL-supply = <&pivariety_vddl>;
+
+		rotation = <0>;
+		orientation = <2>;
+
+		port {
+			csi2_pivariety_out: endpoint {
+				remote-endpoint = <&csi2rx0_in_pivariety>;
+
+				link-frequencies = /bits/ 64 <493500000>;
+
+				clock-lanes = <0>;
+				data-lanes = <1 2>;
+				clock-noncontinuous;
+			};
+		};
+	};
+};
+
+/* T3 Gemstone CSI0 Cadence CSI-2 receiver input. */
+&cdns_csi2rx0 {
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		port@0 {
+			reg = <0>;
+			status = "okay";
+
+			csi2rx0_in_pivariety: endpoint {
+				remote-endpoint =
+					<&csi2_pivariety_out>;
+
+				bus-type = <4>;
+				clock-lanes = <0>;
+				data-lanes = <1 2>;
+				clock-noncontinuous;
+			};
+		};
+	};
+};
+
+&ti_csi2rx0 {
+	status = "okay";
+};
+
+&dphy0 {
+	status = "okay";
+};
+
