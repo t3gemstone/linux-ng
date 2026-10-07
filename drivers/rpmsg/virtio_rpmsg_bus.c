@@ -111,18 +111,19 @@ struct virtio_rpmsg_channel {
 	container_of(_rpdev, struct virtio_rpmsg_channel, rpdev)
 
 /*
- * By default we allocate buffers of 512 bytes each for communications. The
- * buffer size can be changed with the "max_buf_size" module parameter.
+ * By default we allocate buffers of 2048 bytes each for communications. The
+ * buffer size can be changed with the "max_buf_size" module parameter
+ * (e.g. max_buf_size=512 restores the old upstream default).
  * The number of buffers will be computed from the number of buffers supported
  * by the vring, upto a maximum of 512 buffers (256 in each direction) by
  * default; this maximum can be changed with the "max_num_bufs" module
  * parameter.
  *
  * With the default size, each buffer will have 16 bytes for the msg header
- * and 496 bytes for the payload.
+ * and 2032 bytes for the payload.
  *
- * This will utilize a maximum total space of 256KB for the buffers with the
- * default buffer size (MAX_RPMSG_NUM_BUFS * max_buf_size in general).
+ * This will utilize a maximum total space of 1MB for the buffers with the
+ * default settings (max_num_bufs * max_buf_size in general).
  *
  * We might also want to add support for user-provided buffers in time.
  * This will allow bigger buffer size flexibility, and can also be used
@@ -133,7 +134,7 @@ struct virtio_rpmsg_channel {
  * processor (as long as the firmware doesn't hardcode the buffer size).
  */
 #define MAX_RPMSG_NUM_BUFS	(512)
-#define MAX_RPMSG_BUF_SIZE	(512)
+#define MAX_RPMSG_BUF_SIZE	(2048)
 
 /*
  * The len field of struct rpmsg_hdr is 16 bits wide, so the payload can't
@@ -153,13 +154,13 @@ MODULE_PARM_DESC(max_buf_size,
  * buffers must be even and at least 2. It is also capped by the vring size
  * (2 * vring size) at probe time.
  */
-#define MIN_RPMSG_NUM_BUFS\t(2)
+#define MIN_RPMSG_NUM_BUFS	(2)
 
 static unsigned int max_num_bufs = MAX_RPMSG_NUM_BUFS;
 module_param(max_num_bufs, uint, 0444);
 MODULE_PARM_DESC(max_num_bufs,
-\t\t "Maximum total number of rpmsg buffers (rx + tx); rounded down to an even number (default: "
-\t\t __stringify(MAX_RPMSG_NUM_BUFS) ")");
+		 "Maximum total number of rpmsg buffers (rx + tx); rounded down to an even number (default: "
+		 __stringify(MAX_RPMSG_NUM_BUFS) ")");
 
 /*
  * Local addresses are dynamically allocated on-demand.
@@ -1088,3 +1089,4 @@ module_exit(rpmsg_fini);
 MODULE_DEVICE_TABLE(virtio, id_table);
 MODULE_DESCRIPTION("Virtio-based remote processor messaging bus");
 MODULE_LICENSE("GPL v2");
+
